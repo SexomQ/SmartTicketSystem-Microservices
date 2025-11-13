@@ -36,6 +36,26 @@ mq = MessageQueue(
 )
 
 
+def serialize_ticket(ticket_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Serialize ticket data for JSON encoding (convert datetime to ISO format strings)
+
+    Args:
+        ticket_data: Ticket data dictionary
+
+    Returns:
+        Serialized ticket dictionary
+    """
+    from datetime import datetime
+    serialized = {}
+    for key, value in ticket_data.items():
+        if isinstance(value, datetime):
+            serialized[key] = value.isoformat()
+        else:
+            serialized[key] = value
+    return serialized
+
+
 def publish_ticket_event(event_type: str, ticket_data: Dict[str, Any]) -> None:
     """
     Publish ticket event to message queue
@@ -46,12 +66,14 @@ def publish_ticket_event(event_type: str, ticket_data: Dict[str, Any]) -> None:
     """
     try:
         routing_key = f"ticket.{event_type}"
+        # Serialize datetime objects before publishing
+        serialized_ticket = serialize_ticket(ticket_data)
         mq.publish(
             exchange_name=constants.EXCHANGE_TICKETS,
             routing_key=routing_key,
             message={
                 'event_type': event_type,
-                'ticket': ticket_data
+                'ticket': serialized_ticket
             }
         )
         logger.debug(f"Published {event_type} event for ticket {ticket_data.get('id')}")

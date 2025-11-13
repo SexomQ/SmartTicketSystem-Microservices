@@ -124,37 +124,81 @@ class MessageQueue:
         )
         self.logger.info(f"Bound queue {queue_name} to exchange {exchange_name} with key {routing_key}")
 
+    def _ensure_connection(self) -> None:
+        """
+        Ensure connection and channel are open, reconnect if needed
+        """
+        try:
+            if not self.connection or self.connection.is_closed:
+                self.logger.warning("Connection is closed, reconnecting...")
+                self.connect()
+            elif not self.channel or self.channel.is_closed:
+                self.logger.warning("Channel is closed, reopening...")
+                self.channel = self.connection.channel()
+        except Exception as e:
+            self.logger.error(f"Error ensuring connection: {str(e)}")
+            self.connect()
+
     def publish(
         self,
         exchange_name: str,
         routing_key: str,
         message: Dict[str, Any],
-        persistent: bool = True
+        persistent: bool = True,
+        max_retries: int = 3
     ) -> None:
         """
-        Publish a message to an exchange
+        Publish a message to an exchange with retry logic
 
         Args:
             exchange_name: Name of the exchange
             routing_key: Routing key
             message: Message dictionary to publish
             persistent: Whether the message should be persistent
+            max_retries: Maximum number of retry attempts
         """
-        if not self.channel:
-            raise Exception("Not connected to RabbitMQ")
+        body = json.dumps(message)
 
-        properties = pika.BasicProperties(
-            delivery_mode=2 if persistent else 1,  # 2 = persistent
-            content_type='application/json'
-        )
+        for attempt in range(max_retries):
+            try:
+                # Ensure connection is active before publishing
+                self._ensure_connection()
 
-        self.channel.basic_publish(
-            exchange=exchange_name,
-            routing_key=routing_key,
-            body=json.dumps(message),
-            properties=properties
-        )
-        self.logger.debug(f"Published message to {exchange_name} with key {routing_key}")
+                properties = pika.BasicProperties(
+                    delivery_mode=2 if persistent else 1,
+                    content_type='application/json'
+                )
+
+                self.channel.basic_publish(
+                    exchange=exchange_name,
+                    routing_key=routing_key,
+                    body=body,
+                    properties=properties
+                )
+                self.logger.debug(f"Published message to {exchange_name} with key {routing_key}")
+                return  # Success, exit retry loop
+
+            except (pika.exceptions.ConnectionClosed,
+                    pika.exceptions.ChannelClosed,
+                    pika.exceptions.AMQPError) as e:
+                self.logger.warning(
+                    f"Publish attempt {attempt + 1}/{max_retries} failed: {str(e)}"
+                )
+                if attempt < max_retries - 1:
+                    # Force full reconnection
+                    try:
+                        if self.connection and not self.connection.is_closed:
+                            self.connection.close()
+                    except:
+                        pass
+                    self.connection = None
+                    self.channel = None
+                    time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                else:
+                    self.logger.error(
+                        f"Failed to publish message after {max_retries} attempts"
+                    )
+                    raise
 
     def consume(
         self,

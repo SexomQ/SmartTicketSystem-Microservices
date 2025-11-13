@@ -15,6 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Create non-root user
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
+# Set Python path
+ENV PYTHONPATH=/app
 
 # Expose port
 EXPOSE 5003
